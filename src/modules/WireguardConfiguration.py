@@ -5,6 +5,7 @@ from typing import Any
 
 import jinja2
 import sqlalchemy, random, shutil, configparser, ipaddress, os, subprocess, time, re, uuid, psutil, traceback
+from sqlalchemy import exc as sa_exc
 from zipfile import ZipFile
 from datetime import datetime, timedelta
 from itertools import islice
@@ -15,6 +16,11 @@ from .DashboardConfig import DashboardConfig
 from .Peer import Peer
 from .PeerJobs import PeerJobs
 from .PeerShareLinks import PeerShareLinks
+from .PeerLimits import (
+    PeerLimitSettings,
+    DEFAULT_TTL_SECONDS,
+    DEFAULT_GRACE_SECONDS,
+)
 from .Utilities import StringToBoolean, GenerateWireguardPublicKey, RegexMatch, ValidateDNSAddress, \
     ValidateEndpointAllowedIPs
 from .WireguardConfigurationInfo import WireguardConfigurationInfo, PeerGroupsClass
@@ -255,6 +261,10 @@ class WireguardConfiguration:
             sqlalchemy.Column('keepalive', sqlalchemy.Integer),
             sqlalchemy.Column('remote_endpoint', sqlalchemy.String(255)),
             sqlalchemy.Column('preshared_key', sqlalchemy.String(255)),
+            sqlalchemy.Column('max_concurrent', sqlalchemy.Integer),
+            sqlalchemy.Column('connection_policy', sqlalchemy.String(32)),
+            sqlalchemy.Column('session_ttl', sqlalchemy.Integer),
+            sqlalchemy.Column('grace_seconds', sqlalchemy.Integer),
             extend_existing=True
         )
         self.peersRestrictedTable = sqlalchemy.Table(
@@ -278,6 +288,10 @@ class WireguardConfiguration:
             sqlalchemy.Column('keepalive', sqlalchemy.Integer),
             sqlalchemy.Column('remote_endpoint', sqlalchemy.String(255)),
             sqlalchemy.Column('preshared_key', sqlalchemy.String(255)),
+            sqlalchemy.Column('max_concurrent', sqlalchemy.Integer),
+            sqlalchemy.Column('connection_policy', sqlalchemy.String(32)),
+            sqlalchemy.Column('session_ttl', sqlalchemy.Integer),
+            sqlalchemy.Column('grace_seconds', sqlalchemy.Integer),
             extend_existing=True
         )
         self.peersTransferTable = sqlalchemy.Table(
@@ -324,6 +338,10 @@ class WireguardConfiguration:
             sqlalchemy.Column('keepalive', sqlalchemy.Integer),
             sqlalchemy.Column('remote_endpoint', sqlalchemy.String(255)),
             sqlalchemy.Column('preshared_key', sqlalchemy.String(255)),
+            sqlalchemy.Column('max_concurrent', sqlalchemy.Integer),
+            sqlalchemy.Column('connection_policy', sqlalchemy.String(32)),
+            sqlalchemy.Column('session_ttl', sqlalchemy.Integer),
+            sqlalchemy.Column('grace_seconds', sqlalchemy.Integer),
             extend_existing=True
         )
         self.infoTable = sqlalchemy.Table(
@@ -334,6 +352,79 @@ class WireguardConfiguration:
         )
 
         self.metadata.create_all(self.engine)
+        self.__ensurePeerLimitColumns(dbName)
+
+    def __ensurePeerLimitColumns(self, dbName: str) -> None:
+        inspector = sqlalchemy.inspect(self.engine)
+        preparer = self.engine.dialect.identifier_preparer
+        tables = [dbName, f"{dbName}_restrict_access", f"{dbName}_deleted"]
+        defaults = PeerLimitSettings().to_record()
+        with self.engine.begin() as conn:
+            for table_name in tables:
+                try:
+                    columns = {col['name'] for col in inspector.get_columns(table_name)}
+                except sa_exc.NoSuchTableError:
+                    continue
+                quoted_table = preparer.quote(table_name)
+                statements = []
+                if 'max_concurrent' not in columns:
+                    statements.append(
+                        sqlalchemy.text(
+                            f"ALTER TABLE {quoted_table} ADD COLUMN {preparer.quote('max_concurrent')} INTEGER"
+                        )
+                    )
+                if 'connection_policy' not in columns:
+                    statements.append(
+                        sqlalchemy.text(
+                            f"ALTER TABLE {quoted_table} ADD COLUMN {preparer.quote('connection_policy')} VARCHAR(32)"
+                        )
+                    )
+                if 'session_ttl' not in columns:
+                    statements.append(
+                        sqlalchemy.text(
+                            f"ALTER TABLE {quoted_table} ADD COLUMN {preparer.quote('session_ttl')} INTEGER"
+                        )
+                    )
+                if 'grace_seconds' not in columns:
+                    statements.append(
+                        sqlalchemy.text(
+                            f"ALTER TABLE {quoted_table} ADD COLUMN {preparer.quote('grace_seconds')} INTEGER"
+                        )
+                    )
+                for statement in statements:
+                    try:
+                        conn.execute(statement)
+                    except sa_exc.DatabaseError:
+                        pass
+                conn.execute(
+                    sqlalchemy.text(
+                        f"UPDATE {quoted_table} SET {preparer.quote('connection_policy')} = :policy "
+                        f"WHERE {preparer.quote('connection_policy')} IS NULL"
+                    ),
+                    {"policy": defaults['connection_policy']},
+                )
+                conn.execute(
+                    sqlalchemy.text(
+                        f"UPDATE {quoted_table} SET {preparer.quote('session_ttl')} = :ttl "
+                        f"WHERE {preparer.quote('session_ttl')} IS NULL OR {preparer.quote('session_ttl')} < 1"
+                    ),
+                    {"ttl": defaults['session_ttl'] or DEFAULT_TTL_SECONDS},
+                )
+                conn.execute(
+                    sqlalchemy.text(
+                        f"UPDATE {quoted_table} SET {preparer.quote('grace_seconds')} = :grace "
+                        f"WHERE {preparer.quote('grace_seconds')} IS NULL OR {preparer.quote('grace_seconds')} < 0"
+                    ),
+                    {"grace": defaults['grace_seconds'] or DEFAULT_GRACE_SECONDS},
+                )
+
+    def __applyPeerLimitDefaults(self, peerRecord: dict) -> dict:
+        settings = PeerLimitSettings.from_row(peerRecord)
+        peerRecord['max_concurrent'] = settings.max_concurrent
+        peerRecord['connection_policy'] = settings.policy.value
+        peerRecord['session_ttl'] = settings.ttl_seconds
+        peerRecord['grace_seconds'] = settings.grace_seconds
+        return peerRecord
 
     def __dumpDatabase(self):
         with self.engine.connect() as conn:
@@ -457,12 +548,16 @@ class WireguardConfiguration:
                                     "mtu": self.DashboardConfig.GetConfig("Peers", "peer_mtu")[1] if len(self.DashboardConfig.GetConfig("Peers", "peer_mtu")[1]) > 0 else None,
                                     "keepalive": self.DashboardConfig.GetConfig("Peers", "peer_keep_alive")[1] if len(self.DashboardConfig.GetConfig("Peers", "peer_keep_alive")[1]) > 0 else None,
                                     "remote_endpoint": self.DashboardConfig.GetConfig("Peers", "remote_endpoint")[1],
-                                    "preshared_key": i["PresharedKey"] if "PresharedKey" in i.keys() else ""
+                                    "preshared_key": i["PresharedKey"] if "PresharedKey" in i.keys() else "",
+                                    "max_concurrent": None,
+                                    "connection_policy": PeerLimitSettings().policy.value,
+                                    "session_ttl": DEFAULT_TTL_SECONDS,
+                                    "grace_seconds": DEFAULT_GRACE_SECONDS,
                                 }
                                 with self.engine.begin() as conn:
                                     conn.execute(
                                         self.peersTable.insert().values(tempPeer)
-                                    )                                    
+                                    )
                             else:
                                 with self.engine.begin() as conn:
                                     conn.execute(
@@ -472,14 +567,14 @@ class WireguardConfiguration:
                                             self.peersTable.columns.id == i['PublicKey']
                                         )
                                     )
-                            tmpList.append(Peer(tempPeer, self))
+                            tmpList.append(Peer(self.__applyPeerLimitDefaults(dict(tempPeer)), self))
                 except Exception as e:
                     current_app.logger.error(f"{self.Name} getPeers() Error", e)
         else:
             with self.engine.connect() as conn:
                 existingPeers = conn.execute(self.peersTable.select()).mappings().fetchall()
                 for i in existingPeers:
-                    tmpList.append(Peer(i, self))
+                    tmpList.append(Peer(self.__applyPeerLimitDefaults(dict(i)), self))
         self.Peers = tmpList
     
     def logPeersTraffic(self):
@@ -540,8 +635,13 @@ class WireguardConfiguration:
                         "mtu": i['mtu'],
                         "keepalive": i['keepalive'],
                         "remote_endpoint": self.DashboardConfig.GetConfig("Peers", "remote_endpoint")[1],
-                        "preshared_key": i["preshared_key"]
+                        "preshared_key": i["preshared_key"],
+                        "max_concurrent": i.get("max_concurrent"),
+                        "connection_policy": i.get("connection_policy"),
+                        "session_ttl": i.get("session_ttl"),
+                        "grace_seconds": i.get("grace_seconds"),
                     }
+                    newPeer = self.__applyPeerLimitDefaults(newPeer)
                     conn.execute(
                         self.peersTable.insert().values(newPeer)
                     )
@@ -572,6 +672,21 @@ class WireguardConfiguration:
             current_app.logger.error("Add peers error", e)
             return False, [], str(e)
         return True, result['peers'], ""
+
+    def updatePeerLimits(self, peer_id: str, settings: PeerLimitSettings) -> None:
+        record = settings.to_record()
+        with self.engine.begin() as conn:
+            conn.execute(
+                self.peersTable.update().values(record).where(
+                    self.peersTable.c.id == peer_id
+                )
+            )
+            conn.execute(
+                self.peersRestrictedTable.update().values(record).where(
+                    self.peersRestrictedTable.c.id == peer_id
+                )
+            )
+        self.getPeers()
 
     def searchPeer(self, publicKey):
         for i in self.Peers:

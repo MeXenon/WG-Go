@@ -1,5 +1,5 @@
 <script>
-import {fetchPost} from "@/utilities/fetch.js";
+import {fetchGet, fetchPost} from "@/utilities/fetch.js";
 import {DashboardConfigurationStore} from "@/stores/DashboardConfigurationStore.js";
 import LocaleText from "@/components/text/localeText.vue";
 
@@ -9,42 +9,71 @@ export default {
 	props: {
 		selectedPeer: Object
 	},
-	data(){
-		return {
-			data: undefined,
-			dataChanged: false,
-			showKey: false,
-			saving: false
-		}
-	},
+        data(){
+                return {
+                        data: undefined,
+                        dataChanged: false,
+                        showKey: false,
+                        saving: false,
+                        limitSummary: {
+                                activeSessions: 0
+                        }
+                }
+        },
 	setup(){
 		const dashboardConfigurationStore = DashboardConfigurationStore();
 		return {dashboardConfigurationStore}
 	},
 	methods: {
-		reset(){
-			if (this.selectedPeer){
-				this.data = JSON.parse(JSON.stringify(this.selectedPeer))
-				this.dataChanged = false;
-			}
-		},
-		savePeer(){
-			this.saving = true;
-			fetchPost(`/api/updatePeerSettings/${this.$route.params.id}`, this.data, (res) => {
-				this.saving = false;
-				if (res.status){
-					this.dashboardConfigurationStore.newMessage("Server", "Peer saved", "success")
-				}else{
-					this.dashboardConfigurationStore.newMessage("Server", res.message, "danger")
-				}
-				this.$emit("refresh")
-			})
-		},
-		resetPeerData(type){
-			this.saving = true
-			fetchPost(`/api/resetPeerData/${this.$route.params.id}`, {
-				id: this.data.id,
-				type: type
+                reset(){
+                        if (this.selectedPeer){
+                                this.data = JSON.parse(JSON.stringify(this.selectedPeer))
+                                this.data.maxConcurrent = this.selectedPeer.max_concurrent ?? 0
+                                this.data.policy = this.selectedPeer.connection_policy ?? "new_wins"
+                                this.data.ttlSeconds = this.selectedPeer.session_ttl ?? 180
+                                this.data.graceSeconds = this.selectedPeer.grace_seconds ?? 5
+                                this.dataChanged = false;
+                        }
+                },
+                savePeer(){
+                        this.saving = true;
+                        const payload = {
+                                ...this.data,
+                                maxConcurrent: this.data.maxConcurrent,
+                                policy: this.data.policy,
+                                ttlSeconds: this.data.ttlSeconds,
+                                graceSeconds: this.data.graceSeconds
+                        }
+                        fetchPost(`/api/updatePeerSettings/${this.$route.params.id}`, payload, (res) => {
+                                this.saving = false;
+                                if (res.status){
+                                        this.dashboardConfigurationStore.newMessage("Server", "Peer saved", "success")
+                                        this.loadLimits()
+                                }else{
+                                        this.dashboardConfigurationStore.newMessage("Server", res.message, "danger")
+                                }
+                                this.$emit("refresh")
+                        })
+                },
+                loadLimits(){
+                        if (!this.data || !this.data.id){
+                                return
+                        }
+                        fetchGet(`/api/peers/${this.$route.params.id}/${this.data.id}/limits`, {}, (res) => {
+                                if (res.status && res.data){
+                                        this.limitSummary = res.data
+                                        this.data.maxConcurrent = res.data.maxConcurrent ?? 0
+                                        this.data.policy = res.data.policy ?? "new_wins"
+                                        this.data.ttlSeconds = res.data.ttlSeconds ?? 180
+                                        this.data.graceSeconds = res.data.graceSeconds ?? 5
+                                }
+                        })
+                },
+                resetPeerData(type){
+                        this.saving = true
+                        fetchPost(`/api/resetPeerData/${this.$route.params.id}`, {
+                                id: this.data.id,
+                                type: type
 			}, (res) => {
 				this.saving = false;
 				if (res.status){
@@ -55,17 +84,34 @@ export default {
 				this.$emit("refresh")
 			})
 		}
-	},
-	beforeMount() {
-		this.reset();
-	},
-	mounted() {
-		this.$el.querySelectorAll("input").forEach(x => {
-			x.addEventListener("change", () => {
-				this.dataChanged = true;
-			});
-		})
-	}
+        },
+        computed: {
+                maxConcurrentDisplay(){
+                        if (!this.data) return null
+                        return this.data.maxConcurrent && this.data.maxConcurrent > 0 ? this.data.maxConcurrent : null
+                },
+                policyDisplay(){
+                        return this.data && this.data.policy === 'old_wins'
+                                ? "Keep existing connection"
+                                : "New connection replaces old"
+                }
+        },
+        beforeMount() {
+                this.reset();
+        },
+        mounted() {
+                this.loadLimits()
+                this.$el.querySelectorAll("input").forEach(x => {
+                        x.addEventListener("change", () => {
+                                this.dataChanged = true;
+                        });
+                })
+                this.$el.querySelectorAll("select").forEach(x => {
+                        x.addEventListener("change", () => {
+                                this.dataChanged = true;
+                        });
+                })
+        }
 }
 </script>
 
@@ -81,18 +127,26 @@ export default {
 						<button type="button" class="btn-close ms-auto" @click="this.$emit('close')"></button>
 					</div>
 					<div class="card-body px-4" v-if="this.data">
-						<div class="d-flex flex-column gap-2 mb-4">
-							<div class="d-flex align-items-center">
-								<small class="text-muted">
-									<LocaleText t="Public Key"></LocaleText>
-								</small>
-								<small class="ms-auto"><samp>{{this.data.id}}</samp></small>
-							</div>
-							<div>
-								<label for="peer_name_textbox" class="form-label">
-									<small class="text-muted">
-										<LocaleText t="Name"></LocaleText>
-									</small>
+                                                <div class="d-flex flex-column gap-2 mb-4">
+                                                        <div class="d-flex align-items-center">
+                                                                <small class="text-muted">
+                                                                        <LocaleText t="Public Key"></LocaleText>
+                                                                </small>
+                                                                <small class="ms-auto"><samp>{{this.data.id}}</samp></small>
+                                                        </div>
+                                                        <div class="alert alert-secondary py-2 px-3 mb-0" role="status">
+                                                                <small class="text-muted">
+                                                                        <LocaleText t="Active sessions"></LocaleText>:
+                                                                        <span class="fw-bold">{{limitSummary.activeSessions}}</span>
+                                                                        <template v-if="maxConcurrentDisplay">/{{maxConcurrentDisplay}}</template>
+                                                                        (<LocaleText :t="policyDisplay"></LocaleText>)
+                                                                </small>
+                                                        </div>
+                                                        <div>
+                                                                <label for="peer_name_textbox" class="form-label">
+                                                                        <small class="text-muted">
+                                                                                <LocaleText t="Name"></LocaleText>
+                                                                        </small>
 								</label>
 								<input type="text" class="form-control form-control-sm rounded-3"
 								       :disabled="this.saving"
@@ -187,20 +241,43 @@ export default {
 												       v-model="this.data.mtu"
 												       id="peer_mtu">
 											</div>
-											<div>
-												<label for="peer_keep_alive" class="form-label">
-													<small class="text-muted">
-														<LocaleText t="Persistent Keepalive"></LocaleText>
-													</small>
-												</label>
-												<input type="number" class="form-control form-control-sm rounded-3"
-												       :disabled="this.saving"
-												       v-model="this.data.keepalive"
-												       id="peer_keep_alive">
-											</div>
-										</div>
-									</div>
-								</div>
+                                                                                        <div>
+                                                                                                <label for="peer_keep_alive" class="form-label">
+                                                                                                        <small class="text-muted">
+                                                                                                                <LocaleText t="Persistent Keepalive"></LocaleText>
+                                                                                                        </small>
+                                                                                                </label>
+                                                                                                <input type="number" class="form-control form-control-sm rounded-3"
+                                                                                                       :disabled="this.saving"
+                                                                                                       v-model="this.data.keepalive"
+                                                                                                       id="peer_keep_alive">
+                                                                                        </div>
+                                                                                        <div>
+                                                                                                <label for="peer_max_concurrent" class="form-label">
+                                                                                                        <small class="text-muted"><LocaleText t="Simultaneous Connections"></LocaleText></small>
+                                                                                                </label>
+                                                                                                <input type="number" class="form-control form-control-sm rounded-3"
+                                                                                                       :disabled="this.saving"
+                                                                                                       id="peer_max_concurrent"
+                                                                                                       min="0"
+                                                                                                       v-model.number="this.data.maxConcurrent">
+                                                                                                <small class="text-muted"><LocaleText t="Leave blank or zero for unlimited"></LocaleText></small>
+                                                                                        </div>
+                                                                                        <div>
+                                                                                                <label for="peer_policy" class="form-label">
+                                                                                                        <small class="text-muted"><LocaleText t="Policy"></LocaleText></small>
+                                                                                                </label>
+                                                                                                <select id="peer_policy" class="form-select form-select-sm rounded-3"
+                                                                                                        :disabled="this.saving"
+                                                                                                        v-model="this.data.policy">
+                                                                                                        <option value="new_wins"><LocaleText t="New connection replaces old"></LocaleText></option>
+                                                                                                        <option value="old_wins"><LocaleText t="Keep existing connection"></LocaleText></option>
+                                                                                                </select>
+                                                                                                <small class="text-muted"><LocaleText t="Choose how to handle new connections when the limit is reached."></LocaleText></small>
+                                                                                        </div>
+                                                                                </div>
+                                                                        </div>
+                                                                </div>
 							</div>
 							<div class="d-flex align-items-center gap-2">
 								<button class="btn bg-secondary-subtle border-secondary-subtle text-secondary-emphasis rounded-3 shadow ms-auto px-3 py-2"
