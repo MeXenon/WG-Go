@@ -365,5 +365,17 @@
 	"or": "หรือ",
 	"or click the button below to download the ": "หรือคลิกปุ่มด้านล่างเพื่อดาวน์โหลด",
 	"then": "แล้ว",
-	"to add your server": "เพื่อเพิ่มเซิร์ฟเวอร์ของคุณ"
+	"to add your server": "เพื่อเพิ่มเซิร์ฟเวอร์ของคุณ",
+        "Active sessions": "Active sessions",
+        "Simultaneous Connections": "Simultaneous Connections",
+        "Leave blank or zero for unlimited": "Leave blank or zero for unlimited",
+        "Policy": "Policy",
+        "New connection replaces old": "New connection replaces old",
+        "Keep existing connection": "Keep existing connection",
+        "Choose how to handle new connections when the limit is reached.": "Choose how to handle new connections when the limit is reached.",
+        "Current Sessions": "Current Sessions",
+        "No active sessions": "No active sessions",
+        "Last handshake": "Last handshake",
+        "Traffic delta": "Traffic delta",
+        "Awaiting slot": "Awaiting slot"
 }

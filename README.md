@@ -86,3 +86,20 @@
 <img src="https://wgdashboard-resources.tor1.cdn.digitaloceanspaces.com/Documentation%20Images/add-peers.png" alt="" />
 <img src="https://wgdashboard-resources.tor1.cdn.digitaloceanspaces.com/Documentation%20Images/ping.png" alt=""/>
 <img src="https://wgdashboard-resources.tor1.cdn.digitaloceanspaces.com/Documentation%20Images/traceroute.png" alt=""/>
+
+## Simultaneous connection limits
+
+WG-Go extends WGDashboard with per-peer connection limiting. When editing or creating a peer you can now choose:
+
+* **Simultaneous Connections** – a number input where `0` or blank means unlimited.
+* **Policy** – whether the newest endpoint displaces existing traffic (`new_wins`) or the existing connection is retained (`old_wins`).
+
+The limiter daemon polls `wg show ... dump` every second to track active endpoints. A session is counted while its handshake is fresher than the configured TTL (default 180 seconds) and remains briefly during the 5 second grace window to avoid flapping while devices roam. Enforcement happens through nftables (or iptables/ipset if nft is unavailable) by only allowing the permitted endpoint/port tuples.
+
+The daemon stores live session information that the API exposes via:
+
+* `GET /api/peers/<config>/<peer>/limits` – returns the effective settings plus the number of allowed sessions.
+* `PUT /api/peers/<config>/<peer>/limits` – updates the limit for a peer.
+* `GET /api/peers/<config>/<peer>/usage` – lists active endpoints together with handshake ages and traffic deltas.
+
+To run the limiter alongside the dashboard install the provided `wg-go-limiter.service` systemd unit (adjust the `WorkingDirectory` and `ExecStart` paths to match your installation) and enable it with `systemctl enable --now wg-go-limiter`. The service requires `CAP_NET_ADMIN` and `CAP_NET_RAW` in order to update firewall rules.

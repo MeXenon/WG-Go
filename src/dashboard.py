@@ -31,6 +31,9 @@ from modules.PeerJobs import PeerJobs
 from modules.DashboardConfig import DashboardConfig
 from modules.WireguardConfiguration import WireguardConfiguration
 from modules.AmneziaWireguardConfiguration import AmneziaWireguardConfiguration
+from modules.PeerLimits import PeerLimitPolicy, PeerLimitSettings
+from modules.PeerLimiterState import PeerLimiterStateRepository
+from modules.ConnectionString import ConnectionString
 
 from client import createClientBlueprint
 
@@ -131,6 +134,67 @@ def ProtocolsEnabled() -> list[str]:
         protocols.append("wg")
     return protocols
 
+
+def _parse_peer_limit_payload(payload: dict, existing: PeerLimitSettings | None = None) -> tuple[bool, PeerLimitSettings | None, str]:
+    existing = existing or PeerLimitSettings()
+    max_concurrent_raw = payload.get('maxConcurrent', payload.get('max_concurrent'))
+    if max_concurrent_raw in ("", None):
+        max_concurrent = existing.max_concurrent
+    else:
+        try:
+            max_concurrent = int(max_concurrent_raw)
+        except (TypeError, ValueError):
+            return False, None, "maxConcurrent must be an integer"
+        if max_concurrent < 0:
+            return False, None, "maxConcurrent cannot be negative"
+        if max_concurrent == 0:
+            max_concurrent = None
+
+    policy_raw = payload.get('policy', payload.get('connection_policy'))
+    try:
+        policy = PeerLimitPolicy(policy_raw) if policy_raw is not None else existing.policy
+    except ValueError:
+        return False, None, "Unsupported policy. Expected new_wins or old_wins"
+
+    ttl_raw = payload.get('ttlSeconds', payload.get('session_ttl'))
+    if ttl_raw in ("", None):
+        ttl = existing.ttl_seconds
+    else:
+        try:
+            ttl = int(ttl_raw)
+        except (TypeError, ValueError):
+            return False, None, "ttlSeconds must be a positive integer"
+        if ttl < 1:
+            return False, None, "ttlSeconds must be at least 1"
+
+    grace_raw = payload.get('graceSeconds', payload.get('grace_seconds'))
+    if grace_raw in ("", None):
+        grace = existing.grace_seconds
+    else:
+        try:
+            grace = int(grace_raw)
+        except (TypeError, ValueError):
+            return False, None, "graceSeconds must be a non-negative integer"
+        if grace < 0:
+            return False, None, "graceSeconds must be a non-negative integer"
+
+    return True, PeerLimitSettings(
+        max_concurrent=max_concurrent,
+        policy=policy,
+        ttl_seconds=ttl,
+        grace_seconds=grace,
+    ), ""
+
+
+def _get_config_and_peer(configName: str, peerId: str):
+    if configName not in WireguardConfigurations.keys():
+        return None, None, ResponseObject(False, "Configuration does not exist", status_code=404)
+    configuration = WireguardConfigurations.get(configName)
+    found, peer = configuration.searchPeer(peerId)
+    if not found:
+        return configuration, None, ResponseObject(False, "Peer does not exist", status_code=404)
+    return configuration, peer, None
+
 def InitWireguardConfigurationsList(startup: bool = False):
     if os.path.exists(DashboardConfig.GetConfig("Server", "wg_conf_path")[1]):
         confs = os.listdir(DashboardConfig.GetConfig("Server", "wg_conf_path")[1])
@@ -184,6 +248,7 @@ dictConfig({
 
 
 WireguardConfigurations: dict[str, WireguardConfiguration] = {}
+PeerLimiterState: PeerLimiterStateRepository | None = None
 CONFIGURATION_PATH = os.getenv('CONFIGURATION_PATH', '.')
 
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 5206928
@@ -199,6 +264,9 @@ with app.app_context():
     DashboardPlugins: DashboardPlugins = DashboardPlugins(app, WireguardConfigurations)
     DashboardWebHooks: DashboardWebHooks = DashboardWebHooks(DashboardConfig)
     NewConfigurationTemplates: NewConfigurationTemplates = NewConfigurationTemplates()
+    PeerLimiterState: PeerLimiterStateRepository = PeerLimiterStateRepository(
+        sqlalchemy.create_engine(ConnectionString("wgdashboard"))
+    )
     InitWireguardConfigurationsList(startup=True)
     DashboardClients: DashboardClients = DashboardClients(WireguardConfigurations)
     app.register_blueprint(createClientBlueprint(WireguardConfigurations, DashboardConfig, DashboardClients))
@@ -206,7 +274,7 @@ with app.app_context():
 _, APP_PREFIX = DashboardConfig.GetConfig("Server", "app_prefix")
 cors = CORS(app, resources={rf"{APP_PREFIX}/api/*": {
     "origins": "*",
-    "methods": "DELETE, POST, GET, OPTIONS",
+    "methods": "DELETE, POST, GET, OPTIONS, PUT",
     "allow_headers": ["Content-Type", "wg-dashboard-apikey"]
 }})
 _, app_ip = DashboardConfig.GetConfig("Server", "app_ip")
@@ -698,13 +766,23 @@ def API_updatePeerSettings(configName):
         wireguardConfig = WireguardConfigurations[configName]
         foundPeer, peer = wireguardConfig.searchPeer(id)
         if foundPeer:
+            existing_limits = PeerLimitSettings(
+                max_concurrent=peer.max_concurrent,
+                policy=PeerLimitPolicy(peer.connection_policy),
+                ttl_seconds=peer.session_ttl,
+                grace_seconds=peer.grace_seconds,
+            )
+            limit_status, limit_settings, limit_message = _parse_peer_limit_payload(data, existing_limits)
+            if not limit_status:
+                return ResponseObject(False, limit_message)
             if wireguardConfig.Protocol == 'wg':
                 status, msg = peer.updatePeer(name, private_key, preshared_key, dns_addresses,
                                        allowed_ip, endpoint_allowed_ip, mtu, keepalive)
             else:
                 status, msg = peer.updatePeer(name, private_key, preshared_key, dns_addresses,
                     allowed_ip, endpoint_allowed_ip, mtu, keepalive, "off")
-            wireguardConfig.getPeers()
+            if status:
+                wireguardConfig.updatePeerLimits(id, limit_settings)
             DashboardWebHooks.RunWebHook('peer_updated', {
                 "configuration": wireguardConfig.Name,
                 "peers": [id]
@@ -898,7 +976,7 @@ def API_addPeers(configName):
                     for ip in availableIps[subnet]:
                         newPrivateKey = GenerateWireguardPrivateKey()[1]
                         addedCount += 1
-                        keyPairs.append({
+                        peer_entry = {
                             "private_key": newPrivateKey,
                             "id": GenerateWireguardPublicKey(newPrivateKey)[1],
                             "preshared_key": (GenerateWireguardPrivateKey()[1] if preshared_key_bulkAdd else ""),
@@ -909,7 +987,9 @@ def API_addPeers(configName):
                             "mtu": mtu,
                             "keepalive": keep_alive,
                             "advanced_security": "off"
-                        })
+                        }
+                        peer_entry.update(limit_record)
+                        keyPairs.append(peer_entry)
                         if addedCount == bulkAddAmount:
                             break
                     if addedCount == bulkAddAmount:
@@ -959,20 +1039,20 @@ def API_addPeers(configName):
                         if not found:
                             return ResponseObject(False, f"This IP is not available: {i}")
 
-                status, addedPeers, message = config.addPeers([
-                    {
-                        "name": name,
-                        "id": public_key,
-                        "private_key": private_key,
-                        "allowed_ip": ','.join(allowed_ips),
-                        "preshared_key": preshared_key,
-                        "endpoint_allowed_ip": endpoint_allowed_ip,
-                        "DNS": dns_addresses,
-                        "mtu": mtu,
-                        "keepalive": keep_alive,
-                        "advanced_security": "off"
-                    }]
-                )
+                new_peer = {
+                    "name": name,
+                    "id": public_key,
+                    "private_key": private_key,
+                    "allowed_ip": ','.join(allowed_ips),
+                    "preshared_key": preshared_key,
+                    "endpoint_allowed_ip": endpoint_allowed_ip,
+                    "DNS": dns_addresses,
+                    "mtu": mtu,
+                    "keepalive": keep_alive,
+                    "advanced_security": "off"
+                }
+                new_peer.update(limit_record)
+                status, addedPeers, message = config.addPeers([new_peer])
                 return ResponseObject(status=status, message=message, data=addedPeers)
         except Exception as e:
             app.logger.error("Add peers failed", e)
@@ -1046,16 +1126,87 @@ def API_GetPeerHistoricalEndpoints():
             r = requests.post(f"http://ip-api.com/batch?fields=city,country,lat,lon,query",
                               data=json.dumps([x['endpoint'] for x in result]))
             d = r.json()
-            
-                
+
+
         except Exception as e:
             return ResponseObject(data=result, message="Failed to request IP address geolocation. " + str(e))
-        
+
         return ResponseObject(data={
             "endpoints": p.getEndpoints(),
             "geolocation": d
         })
     return ResponseObject(False, "Peer does not exist")
+
+@app.get(f'{APP_PREFIX}/api/peers/<configName>/<peerId>/limits')
+def API_GetPeerLimits(configName: str, peerId: str):
+    configuration, peer, error = _get_config_and_peer(configName, peerId)
+    if error:
+        return error
+    settings = PeerLimitSettings(
+        max_concurrent=peer.max_concurrent,
+        policy=PeerLimitPolicy(peer.connection_policy),
+        ttl_seconds=peer.session_ttl,
+        grace_seconds=peer.grace_seconds,
+    )
+    active_sessions = 0
+    if PeerLimiterState:
+        sessions = PeerLimiterState.get_sessions(configName, peerId)
+        active_sessions = len([s for s in sessions if s.get('allowed', True)])
+    return ResponseObject(data={
+        "maxConcurrent": settings.max_concurrent,
+        "policy": settings.policy.value,
+        "ttlSeconds": settings.ttl_seconds,
+        "graceSeconds": settings.grace_seconds,
+        "activeSessions": active_sessions,
+    })
+
+
+@app.put(f'{APP_PREFIX}/api/peers/<configName>/<peerId>/limits')
+def API_UpdatePeerLimits(configName: str, peerId: str):
+    configuration, peer, error = _get_config_and_peer(configName, peerId)
+    if error:
+        return error
+    payload = request.get_json() or {}
+    existing = PeerLimitSettings(
+        max_concurrent=peer.max_concurrent,
+        policy=PeerLimitPolicy(peer.connection_policy),
+        ttl_seconds=peer.session_ttl,
+        grace_seconds=peer.grace_seconds,
+    )
+    status, settings, message = _parse_peer_limit_payload(payload, existing)
+    if not status or settings is None:
+        return ResponseObject(False, message)
+    configuration.updatePeerLimits(peerId, settings)
+    DashboardWebHooks.RunWebHook('peer_updated', {
+        "configuration": configuration.Name,
+        "peers": [peerId]
+    })
+    active_sessions = 0
+    if PeerLimiterState:
+        sessions = PeerLimiterState.get_sessions(configName, peerId)
+        active_sessions = len([s for s in sessions if s.get('allowed', True)])
+    return ResponseObject(data={
+        "maxConcurrent": settings.max_concurrent,
+        "policy": settings.policy.value,
+        "ttlSeconds": settings.ttl_seconds,
+        "graceSeconds": settings.grace_seconds,
+        "activeSessions": active_sessions,
+    })
+
+
+@app.get(f'{APP_PREFIX}/api/peers/<configName>/<peerId>/usage')
+def API_GetPeerUsage(configName: str, peerId: str):
+    configuration, peer, error = _get_config_and_peer(configName, peerId)
+    if error:
+        return error
+    sessions = []
+    if PeerLimiterState:
+        sessions = PeerLimiterState.get_sessions(configName, peerId)
+    return ResponseObject(data={
+        "peer": peerId,
+        "configuration": configuration.Name,
+        "sessions": sessions,
+    })
 
 @app.get(f'{APP_PREFIX}/api/getPeerSessions')
 def API_GetPeerSessions():

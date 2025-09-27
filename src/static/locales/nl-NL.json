@@ -365,5 +365,17 @@
 	"or": "of",
 	"or click the button below to download the ": "of klik op de knop hieronder om de",
 	"then": "dan",
-	"to add your server": "om uw server toe te voegen"
+	"to add your server": "om uw server toe te voegen",
+        "Active sessions": "Active sessions",
+        "Simultaneous Connections": "Simultaneous Connections",
+        "Leave blank or zero for unlimited": "Leave blank or zero for unlimited",
+        "Policy": "Policy",
+        "New connection replaces old": "New connection replaces old",
+        "Keep existing connection": "Keep existing connection",
+        "Choose how to handle new connections when the limit is reached.": "Choose how to handle new connections when the limit is reached.",
+        "Current Sessions": "Current Sessions",
+        "No active sessions": "No active sessions",
+        "Last handshake": "Last handshake",
+        "Traffic delta": "Traffic delta",
+        "Awaiting slot": "Awaiting slot"
 }

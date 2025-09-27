@@ -1,0 +1,17 @@
+[Unit]
+Description=WG-Go WireGuard connection limiter
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/wg-go
+ExecStart=/usr/bin/env python3 /opt/wg-go/src/peer_limiter_daemon.py --interval 1.0
+Restart=always
+RestartSec=1
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

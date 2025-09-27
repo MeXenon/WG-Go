@@ -12,6 +12,7 @@ import sqlalchemy as db
 from .PeerJob import PeerJob
 from .PeerShareLink import PeerShareLink
 from .Utilities import GenerateWireguardPublicKey, ValidateIPAddressesWithRange, ValidateDNSAddress
+from .PeerLimits import PeerLimitSettings
 
 
 class Peer:
@@ -36,6 +37,11 @@ class Peer:
         self.keepalive = tableData["keepalive"]
         self.remote_endpoint = tableData["remote_endpoint"]
         self.preshared_key = tableData["preshared_key"]
+        settings = PeerLimitSettings.from_row(tableData)
+        self.max_concurrent = settings.max_concurrent
+        self.connection_policy = settings.policy.value
+        self.session_ttl = settings.ttl_seconds
+        self.grace_seconds = settings.grace_seconds
         self.jobs: list[PeerJob] = []
         self.ShareLink: list[PeerShareLink] = []
         self.getJobs()

@@ -31,8 +31,12 @@ const peerData = ref({
 	mtu: parseInt(dashboardStore.Configuration.Peers.peer_mtu),
 	preshared_key: "",
 	preshared_key_bulkAdd: false,
-	advanced_security: "off",
-	allowed_ips_validation: true,
+        advanced_security: "off",
+        allowed_ips_validation: true,
+        maxConcurrent: 0,
+        policy: "new_wins",
+        ttlSeconds: 180,
+        graceSeconds: 5,
 })
 const availableIp = ref([])
 const saving = ref(false)
@@ -124,21 +128,43 @@ watch(() => {
 										<div class="d-flex flex-column gap-2">
 											<DnsInput :saving="saving" :data="peerData"></DnsInput>
 											<EndpointAllowedIps :saving="saving" :data="peerData"></EndpointAllowedIps>
-											<div class="row gy-3">
-												<div class="col-sm" v-if="!peerData.bulkAdd">
-													<PresharedKeyInput :saving="saving" :data="peerData" :bulk="peerData.bulkAdd"></PresharedKeyInput>
-												</div>
+                                                                                        <div class="row gy-3">
+                                                                                                <div class="col-sm" v-if="!peerData.bulkAdd">
+                                                                                                        <PresharedKeyInput :saving="saving" :data="peerData" :bulk="peerData.bulkAdd"></PresharedKeyInput>
+                                                                                                </div>
 
-												<div class="col-sm">
-													<MtuInput :saving="saving" :data="peerData"></MtuInput>
-												</div>
-												<div class="col-sm">
-													<PersistentKeepAliveInput :saving="saving" :data="peerData"></PersistentKeepAliveInput>
-												</div>
-												<div class="col-12" v-if="peerData.bulkAdd">
-													<div class="form-check form-switch">
-														<input class="form-check-input" type="checkbox" role="switch"
-														       v-model="peerData.preshared_key_bulkAdd"
+                                                                                                <div class="col-sm">
+                                                                                                        <MtuInput :saving="saving" :data="peerData"></MtuInput>
+                                                                                                </div>
+                                                                                                <div class="col-sm">
+                                                                                                        <PersistentKeepAliveInput :saving="saving" :data="peerData"></PersistentKeepAliveInput>
+                                                                                                </div>
+                                                                                                <div class="col-sm">
+                                                                                                        <label for="peer_max_concurrent" class="form-label mb-1">
+                                                                                                                <small class="text-muted"><LocaleText t="Simultaneous Connections"></LocaleText></small>
+                                                                                                        </label>
+                                                                                                        <input type="number" min="0" class="form-control form-control-sm rounded-3"
+                                                                                                               :disabled="saving"
+                                                                                                               id="peer_max_concurrent"
+                                                                                                               v-model.number="peerData.maxConcurrent">
+                                                                                                        <small class="text-muted"><LocaleText t="Leave blank or zero for unlimited"></LocaleText></small>
+                                                                                                </div>
+                                                                                                <div class="col-sm">
+                                                                                                        <label for="peer_policy" class="form-label mb-1">
+                                                                                                                <small class="text-muted"><LocaleText t="Policy"></LocaleText></small>
+                                                                                                        </label>
+                                                                                                        <select id="peer_policy" class="form-select form-select-sm rounded-3"
+                                                                                                                :disabled="saving"
+                                                                                                                v-model="peerData.policy">
+                                                                                                                <option value="new_wins"><LocaleText t="New connection replaces old"></LocaleText></option>
+                                                                                                                <option value="old_wins"><LocaleText t="Keep existing connection"></LocaleText></option>
+                                                                                                        </select>
+                                                                                                        <small class="text-muted"><LocaleText t="Choose how to handle new connections when the limit is reached."></LocaleText></small>
+                                                                                                </div>
+                                                                                                <div class="col-12" v-if="peerData.bulkAdd">
+                                                                                                        <div class="form-check form-switch">
+                                                                                                                <input class="form-check-input" type="checkbox" role="switch"
+                                                                                                                       v-model="peerData.preshared_key_bulkAdd"
 														       id="bullAdd_PresharedKey_Switch" checked>
 														<label class="form-check-label" for="bullAdd_PresharedKey_Switch">
 															<small class="fw-bold">

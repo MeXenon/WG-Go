@@ -365,5 +365,17 @@
 	"Untitled Peer": "제목 없는 피어",
 	"Who are you sending to\\?": "누구에게 보내시겠습니까?",
 	"What\\'s the subject\\?": "제목이 무엇입니까?",
-	"What\\'s the body\\?": "본문이 무엇입니까?"
+	"What\\'s the body\\?": "본문이 무엇입니까?",
+        "Active sessions": "Active sessions",
+        "Simultaneous Connections": "Simultaneous Connections",
+        "Leave blank or zero for unlimited": "Leave blank or zero for unlimited",
+        "Policy": "Policy",
+        "New connection replaces old": "New connection replaces old",
+        "Keep existing connection": "Keep existing connection",
+        "Choose how to handle new connections when the limit is reached.": "Choose how to handle new connections when the limit is reached.",
+        "Current Sessions": "Current Sessions",
+        "No active sessions": "No active sessions",
+        "Last handshake": "Last handshake",
+        "Traffic delta": "Traffic delta",
+        "Awaiting slot": "Awaiting slot"
 }

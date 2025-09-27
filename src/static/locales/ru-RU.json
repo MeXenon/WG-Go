@@ -365,5 +365,17 @@
 	"or": "или",
 	"or click the button below to download the ": "Так же, вы можете скачать ",
 	"then": "тогда",
-	"to add your server": "чтобы добавить свой сервер"
+	"to add your server": "чтобы добавить свой сервер",
+        "Active sessions": "Active sessions",
+        "Simultaneous Connections": "Simultaneous Connections",
+        "Leave blank or zero for unlimited": "Leave blank or zero for unlimited",
+        "Policy": "Policy",
+        "New connection replaces old": "New connection replaces old",
+        "Keep existing connection": "Keep existing connection",
+        "Choose how to handle new connections when the limit is reached.": "Choose how to handle new connections when the limit is reached.",
+        "Current Sessions": "Current Sessions",
+        "No active sessions": "No active sessions",
+        "Last handshake": "Last handshake",
+        "Traffic delta": "Traffic delta",
+        "Awaiting slot": "Awaiting slot"
 }
